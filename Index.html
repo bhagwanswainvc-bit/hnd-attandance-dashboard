@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Attendance Dashboard - Cloudflare Edition</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --accent: #0b63d6;
+      --muted: #64748b;
+      --success: #16a34a;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+      --glass-bg: rgba(255, 255, 255, 0.85);
+      --glass-border: 1px solid rgba(226, 232, 240, 0.8);
+      --glass-shadow: 0 8px 32px rgba(2, 6, 23, 0.05);
+      --btn-radius: 10px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+    body { background: var(--bg); color: #1e293b; height: 100vh; overflow: hidden; }
+
+    .app-layout { display: flex; height: 100vh; }
+
+    /* Sidebar */
+    .sidebar {
+      width: 260px; background: linear-gradient(180deg, #0b63d6, #0a58c0);
+      color: #fff; padding: 20px; display: flex; flex-direction: column; gap: 20px;
+    }
+    .sidebar.hidden { display: none; }
+    .sidebar .logo { font-size: 20px; font-weight: 700; text-align: center; border-bottom: 1px solid rgba(255,255,255,0.2); padding-bottom: 15px; }
+    .nav { display: flex; flex-direction: column; gap: 8px; }
+    .nav-item {
+      display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-radius: var(--btn-radius);
+      color: #e6eefc; text-decoration: none; font-size: 14px; transition: 0.2s; cursor: pointer;
+    }
+    .nav-item:hover, .nav-item.active { background: rgba(255,255,255,0.18); font-weight: 600; color: #fff; }
+
+    /* Main Area */
+    .main-content { flex: 1; display: flex; flex-direction: column; overflow-y: auto; }
+    .topbar {
+      height: 64px; background: #fff; border-bottom: var(--glass-border);
+      display: flex; align-items: center; justify-content: space-between; padding: 0 24px;
+    }
+    .topbar.hidden { display: none; }
+    .page-title { font-size: 18px; font-weight: 700; }
+    .user-profile { font-size: 14px; font-weight: 600; color: var(--muted); display: flex; align-items: center; gap: 12px; }
+
+    /* Glass Cards & Elements */
+    .container { padding: 24px; display: flex; flex-direction: column; gap: 20px; }
+    .card { background: var(--glass-bg); border: var(--glass-border); border-radius: 16px; padding: 20px; box-shadow: var(--glass-shadow); }
+    .card-title { font-size: 16px; font-weight: 700; margin-bottom: 14px; color: #0f172a; }
+
+    /* Inputs & Buttons */
+    .input, select, input[type="text"], input[type="email"], input[type="password"], input[type="date"] {
+      background: #fff; border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px 14px; font-size: 14px; width: 100%; margin-top: 6px;
+    }
+    .input:focus, select:focus { outline: none; border-color: var(--accent); ring: 2px rgba(11,99,214,0.2); }
+    
+    .btn {
+      background: var(--accent); color: #fff; border: none; padding: 10px 18px; border-radius: var(--btn-radius);
+      font-weight: 600; cursor: pointer; transition: 0.2s; display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    }
+    .btn:hover { opacity: 0.9; transform: translateY(-1px); }
+    .btn.secondary { background: #e2e8f0; color: #334155; }
+    .btn.danger { background: var(--danger); }
+    .btn.small { padding: 6px 12px; font-size: 12px; }
+
+    /* Form Layouts */
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .full-width { grid-column: 1 / -1; }
+
+    /* Tables & Matrix */
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
+    th, td { border: 1px solid #e2e8f0; padding: 10px; text-align: left; }
+    th { background: #f8fafc; font-weight: 600; }
+
+    .matrix-table { text-align: center; }
+    .matrix-table th, .matrix-table td { padding: 6px; font-size: 12px; }
+    .sun-col { background: #fee2e2 !important; color: #991b1b; font-weight: bold; }
+    .badge-P { background: #dcfce7; color: #166534; padding: 2px 6px; border-radius: 4px; font-weight: 600; }
+    .badge-A { background: #fee2e2; color: #991b1b; padding: 2px 6px; border-radius: 4px; font-weight: 600; }
+    .badge-L { background: #fef3c7; color: #92400e; padding: 2px 6px; border-radius: 4px; font-weight: 600; }
+    .badge-WO { background: #f1f5f9; color: #475569; padding: 2px 6px; border-radius: 4px; font-weight: 600; }
+
+    /* Calendar Grid */
+    .cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; margin-top: 15px; }
+    .cal-header { font-weight: 700; text-align: center; padding: 8px; background: #e2e8f0; border-radius: 6px; }
+    .cal-day { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; min-height: 80px; padding: 8px; position: relative; }
+    .cal-day .num { position: absolute; top: 6px; right: 8px; font-weight: bold; font-size: 12px; color: var(--muted); }
+    .cal-day.sunday { background: #fef2f2; border-color: #fca5a5; }
+    .cal-day.holiday { background: #ecfdf5; border-color: #6ee7b7; }
+    .holiday-tag { font-size: 11px; background: #10b981; color: #fff; padding: 2px 4px; border-radius: 4px; margin-top: 20px; display: inline-block; }
+
+    /* Login Box */
+    .login-overlay { display: flex; align-items: center; justify-content: center; height: 100vh; background: linear-gradient(135deg, #0b63d6, #1e293b); }
+    .login-box { background: #fff; padding: 36px; border-radius: 16px; width: 380px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.2); }
+  </style>
+</head>
+<body>
+
+  <div class="app-layout">
+    <!-- Sidebar -->
+    <div id="sidebar" class="sidebar hidden">
+      <div class="logo">H & D Logistics</div>
+      <div class="nav">
+        <div class="nav-item active" onclick="navigateTo('home')">🏠 Home</div>
+        <div class="nav-item" onclick="navigateTo('attendance')">📝 Attendance</div>
+        <div class="nav-item" onclick="navigateTo('summary')">📊 Summary View</div>
+        <div class="nav-item" onclick="navigateTo('register')">➕ Employee Reg.</div>
+        <div class="nav-item" onclick="navigateTo('separation')">❌ Separation</div>
+        <div class="nav-item" onclick="navigateTo('calendar')">📅 Calendar</div>
+        <div class="nav-item" onclick="navigateTo('reports')">📁 Reports</div>
+      </div>
+      <button class="btn danger small" style="margin-top: auto;" onclick="logout()">Logout</button>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+      <div id="topbar" class="topbar hidden">
+        <div class="page-title" id="pageTitle">Dashboard</div>
+        <div class="user-profile">
+          <span id="userDisplay">Admin</span>
+        </div>
+      </div>
+
+      <div id="appContainer" class="container">
+        <!-- Views will dynamically load here -->
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Local Storage Mock Database Setup
+    const defaultEmployees = [
+      { id: "EMP001", name: "Rahul Sharma", desig: "Manager", join: "2024-01-10", contact: "9876543210", email: "rahul@hd.com" },
+      { id: "EMP002", name: "Priya Singh", desig: "Developer", join: "2024-02-15", contact: "9876543211", email: "priya@hd.com" },
+      { id: "EMP003", name: "Amit Kumar", desig: "Logistics Exec", join: "2024-03-01", contact: "9876543212", email: "amit@hd.com" }
+    ];
+
+    const holidays = {
+      "2026-01-26": "Republic Day",
+      "2026-08-15": "Independence Day",
+      "2026-10-02": "Gandhi Jayanti",
+      "2026-12-25": "Christmas"
+    };
+
+    function initData() {
+      if (!localStorage.getItem('employees')) localStorage.setItem('employees', JSON.stringify(defaultEmployees));
+      if (!localStorage.getItem('attendance')) localStorage.setItem('attendance', JSON.stringify({}));
+    }
+    initData();
+
+    function getEmployees() { return JSON.parse(localStorage.getItem('employees')) || []; }
+    function getAttendance() { return JSON.parse(localStorage.getItem('attendance')) || {}; }
+
+    // Navigation & Auth State
+    let currentUser = localStorage.getItem('currentUser');
+    window.onload = function() {
+      if (currentUser) {
+        showAppUI();
+        navigateTo('home');
+      } else {
+        renderLogin();
+      }
+    };
+
+    function showAppUI() {
+      document.getElementById('sidebar').classList.remove('hidden');
+      document.getElementById('topbar').classList.remove('hidden');
+      document.getElementById('userDisplay').textContent = currentUser;
+    }
+
+    function logout() {
+      localStorage.removeItem('currentUser');
+      location.reload();
+    }
+
+    function renderLogin() {
+      document.getElementById('sidebar').classList.add('hidden');
+      document.getElementById('topbar').classList.add('hidden');
+      document.getElementById('appContainer').innerHTML = `
+        <div class="login-overlay">
+          <div class="login-box">
+            <h2 style="margin-bottom: 8px;">Sign In</h2>
+            <p style="font-size:13px; color:var(--muted); margin-bottom: 16px;">Demo Creds: admin / admin123</p>
+            <label>User ID</label>
+            <input type="text" id="loginUser" class="input" value="admin">
+            <label style="margin-top:10px; display:block;">Password</label>
+            <input type="password" id="loginPass" class="input" value="admin123">
+            <button class="btn" style="width:100%; margin-top:20px;" onclick="handleLogin()">Login</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function handleLogin() {
+      const u = document.getElementById('loginUser').value;
+      const p = document.getElementById('loginPass').value;
+      if (u === "admin" && p === "admin123") {
+        localStorage.setItem('currentUser', u);
+        currentUser = u;
+        showAppUI();
+        navigateTo('home');
+      } else {
+        alert("Invalid User ID or Password");
+      }
+    }
+
+    function navigateTo(page) {
+      document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+      const container = document.getElementById('appContainer');
+
+      if (page === 'home') renderHome(container);
+      else if (page === 'attendance') renderAttendance(container);
+      else if (page === 'summary') renderSummary(container);
+      else if (page === 'register') renderRegister(container);
+      else if (page === 'separation') renderSeparation(container);
+      else if (page === 'calendar') renderCalendar(container);
+      else if (page === 'reports') renderReports(container);
+    }
+
+    // 1. Home Dashboard
+    function renderHome(container) {
+      document.getElementById('pageTitle').textContent = "Home Dashboard";
+      container.innerHTML = `
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:20px;">
+          <div class="card"><div class="card-title">Status Distribution (Pie)</div><canvas id="pieChart"></canvas></div>
+          <div class="card"><div class="card-title">Weekly Trend (Bar)</div><canvas id="barChart"></canvas></div>
+        </div>
+      `;
+      setTimeout(() => {
+        new Chart(document.getElementById('pieChart'), {
+          type: 'pie',
+          data: { labels: ['Present', 'Absent', 'Leave'], datasets: [{ data: [12, 3, 2], backgroundColor: ['#16a34a', '#ef4444', '#f59e0b'] }] }
+        });
+        new Chart(document.getElementById('barChart'), {
+          type: 'bar',
+          data: { labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'], datasets: [{ label: 'Present Trend', data: [10, 12, 11, 14, 12, 8], backgroundColor: '#0b63d6' }] }
+        });
+      }, 100);
+    }
+
+    // 2. Attendance Page
+    function renderAttendance(container) {
+      document.getElementById('pageTitle').textContent = "Mark Bulk Attendance";
+      const emps = getEmployees();
+      let rows = emps.map(e => `
+        <tr>
+          <td><input type="checkbox" class="emp-select" value="${e.id}"></td>
+          <td>${e.id}</td>
+          <td>${e.name}</td>
+          <td>${e.desig}</td>
+        </tr>
+      `).join('');
+
+      container.innerHTML = `
+        <div class="card">
+          <div style="display:flex; gap:12px; margin-bottom:15px; align-items:center;">
+            <label>Select Date: </label><input type="date" id="attDate" value="${new Date().toISOString().split('T')[0]}" style="width:auto;">
+            <select id="bulkStatus" style="width:auto;">
+              <option value="P">Present</option>
+              <option value="A">Absent</option>
+              <option value="L">Leave</option>
+            </select>
+            <button class="btn" onclick="saveBulkAttendance()">Mark Attendance</button>
+          </div>
+          <table>
+            <thead><tr><th><input type="checkbox" onclick="toggleSelectAll(this)"></th><th>Emp ID</th><th>Name</th><th>Designation</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function toggleSelectAll(master) {
+      document.querySelectorAll('.emp-select').forEach(cb => cb.checked = master.checked);
+    }
+
+    function saveBulkAttendance() {
+      const date = document.getElementById('attDate').value;
+      const status = document.getElementById('bulkStatus').value;
+      const selected = Array.from(document.querySelectorAll('.emp-select:checked')).map(cb => cb.value);
+
+      if (selected.length === 0) return alert("Select at least one employee.");
+
+      const att = getAttendance();
+      if (!att[date]) att[date] = {};
+      selected.forEach(id => att[date][id] = status);
+      localStorage.setItem('attendance', JSON.stringify(att));
+      alert("Attendance Saved Successfully!");
+    }
+
+    // 3. Summary View (Pivot)
+    function renderSummary(container) {
+      document.getElementById('pageTitle').textContent = "Monthly Pivot View";
+      const emps = getEmployees();
+      const att = getAttendance();
+      const days = Array.from({length: 30}, (_, i) => i + 1);
+
+      let ths = days.map(d => `<th>${d}</th>`).join('');
+      let rows = emps.map(e => {
+        let tdStatus = days.map(d => {
+          const dayStr = `2026-11-${d < 10 ? '0'+d : d}`;
+          const st = (att[dayStr] && att[dayStr][e.id]) ? att[dayStr][e.id] : '-';
+          return `<td class="${st === 'P' ? 'badge-P' : st === 'A' ? 'badge-A' : ''}">${st}</td>`;
+        }).join('');
+        return `<tr><td style="font-weight:600;">${e.name}</td>${tdStatus}</tr>`;
+      }).join('');
+
+      container.innerHTML = `
+        <div class="card" style="overflow-x:auto;">
+          <table class="matrix-table">
+            <thead><tr><th>Employee Name</th>${ths}</tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    // 4. Employee Registration
+    function renderRegister(container) {
+      document.getElementById('pageTitle').textContent = "Employee Registration";
+      container.innerHTML = `
+        <div class="card">
+          <form onsubmit="registerEmp(event)" class="form-grid">
+            <div><label>Employee ID</label><input type="text" id="rId" required></div>
+            <div><label>Full Name</label><input type="text" id="rName" required></div>
+            <div><label>Designation</label><input type="text" id="rDesig" required></div>
+            <div><label>Joining Date</label><input type="date" id="rJoin" required></div>
+            <div><label>Contact</label><input type="text" id="rContact" required></div>
+            <div><label>Email</label><input type="email" id="rEmail" required></div>
+            <div class="full-width"><button type="submit" class="btn">Submit</button></div>
+          </form>
+        </div>
+      `;
+    }
+
+    function registerEmp(e) {
+      e.preventDefault();
+      const emps = getEmployees();
+      emps.push({
+        id: document.getElementById('rId').value,
+        name: document.getElementById('rName').value,
+        desig: document.getElementById('rDesig').value,
+        join: document.getElementById('rJoin').value,
+        contact: document.getElementById('rContact').value,
+        email: document.getElementById('rEmail').value
+      });
+      localStorage.setItem('employees', JSON.stringify(emps));
+      alert("Employee Registered!");
+      navigateTo('register');
+    }
+
+    // 5. Employee Separation
+    function renderSeparation(container) {
+      document.getElementById('pageTitle').textContent = "Employee Separation";
+      container.innerHTML = `
+        <div class="card">
+          <input type="text" id="sepSearch" placeholder="Search by ID or Name..." onkeyup="filterSeparation()">
+          <table style="margin-top:15px;">
+            <thead><tr><th>Emp ID</th><th>Name</th><th>Designation</th><th>Action</th></tr></thead>
+            <tbody id="sepTable"></tbody>
+          </table>
+        </div>
+      `;
+      filterSeparation();
+    }
+
+    function filterSeparation() {
+      const q = (document.getElementById('sepSearch')?.value || '').toLowerCase();
+      const emps = getEmployees().filter(e => e.name.toLowerCase().includes(q) || e.id.toLowerCase().includes(q));
+      document.getElementById('sepTable').innerHTML = emps.map(e => `
+        <tr>
+          <td>${e.id}</td>
+          <td>${e.name}</td>
+          <td>${e.desig}</td>
+          <td><button class="btn danger small" onclick="removeEmp('${e.id}')">Separate Employee</button></td>
+        </tr>
+      `).join('');
+    }
+
+    function removeEmp(id) {
+      if (confirm(`Remove employee ${id}?`)) {
+        let emps = getEmployees().filter(e => e.id !== id);
+        localStorage.setItem('employees', JSON.stringify(emps));
+        filterSeparation();
+      }
+    }
+
+    // 6. Calendar Page
+    function renderCalendar(container) {
+      document.getElementById('pageTitle').textContent = "Monthly Calendar";
+      let daysHtml = '';
+      for (let i = 1; i <= 31; i++) {
+        const isSun = (i % 7 === 0);
+        const dateKey = `2026-11-${i < 10 ? '0'+i : i}`;
+        const isHol = holidays[dateKey];
+        daysHtml += `
+          <div class="cal-day ${isSun ? 'sunday' : ''} ${isHol ? 'holiday' : ''}">
+            <span class="num">${i}</span>
+            ${isHol ? `<span class="holiday-tag">${isHol}</span>` : ''}
+          </div>
+        `;
+      }
+      container.innerHTML = `
+        <div class="card">
+          <div style="display:flex; gap:10px; margin-bottom:10px;">
+            <select><option>November</option></select>
+            <select><option>2026</option></select>
+          </div>
+          <div class="cal-grid">${daysHtml}</div>
+        </div>
+      `;
+    }
+
+    // 7. Reports Page
+    function renderReports(container) {
+      document.getElementById('pageTitle').textContent = "Reports & Export";
+      container.innerHTML = `
+        <div class="card">
+          <div style="display:flex; gap:10px; margin-bottom:20px;">
+            <select><option>November</option></select>
+            <select><option>2026</option></select>
+          </div>
+          <button class="btn" onclick="exportData('csv')">Export CSV</button>
+          <button class="btn secondary" onclick="exportData('excel')">Export Excel</button>
+        </div>
+      `;
+    }
+
+    function exportData(type) {
+      const emps = getEmployees();
+      let csvContent = "data:text/csv;charset=utf-8,EmpID,Name,Designation\n" + emps.map(e => `${e.id},${e.name},${e.desig}`).join("\n");
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement("a");
+      link.setAttribute("href", encodedUri);
+      link.setAttribute("download", `Attendance_Report.${type === 'csv' ? 'csv' : 'xls'}`);
+      document.body.appendChild(link);
+      link.click();
+    }
+  </script>
+</body>
+</html>
