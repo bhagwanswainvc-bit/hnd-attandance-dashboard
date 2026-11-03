@@ -1,0 +1,871 @@
+<script>
+  var sidebarCollapsed = false;
+  var sidebar = document.getElementById('sidebar');
+  var topbar = document.getElementById('topbar');
+  var headerCountsArea = document.getElementById('headerCountsArea');
+  var toggleBtn = document.getElementById('sidebarToggle');
+  var navItems = document.querySelectorAll('.nav-item');
+  var appContainer = document.getElementById('appContainer');
+  var pageTitle = document.getElementById('pageTitle');
+  var pageSubtitle = document.getElementById('pageSubtitle');
+  var profileCard = document.getElementById('profileCard');
+  var profileDropdown = document.getElementById('profileDropdown');
+
+  window._currentUser = null;
+  var lastSummary = null;
+  var googleChartsLoaded = false;
+  var googleChartsLoading = false;
+  var googleChartsCallbacks = [];
+
+  (function init(){
+    attachNavHandlers();
+    if (toggleBtn) toggleBtn.addEventListener('click', toggleSidebar);
+    profileCard.addEventListener('click', toggleProfileDropdown);
+    document.getElementById('logoutBtn').addEventListener('click', logout);
+    
+    // Session Management via LocalStorage for True Tab Refresh
+    try {
+      var savedUser = localStorage.getItem('hd_logistics_session');
+      if (savedUser) {
+          window._currentUser = JSON.parse(savedUser);
+          setUser(window._currentUser, false); 
+      } else {
+          showLoginPage();
+      }
+    } catch(e) {
+      showLoginPage();
+    }
+
+    window.addEventListener('resize', function(){
+      scheduleRedrawAllCharts(250);
+      adjustHeaderCountsPosition();
+    });
+  })();
+
+  function attachNavHandlers(){
+    navItems.forEach(function(a){
+      a.addEventListener('click', function(e){
+        e.preventDefault();
+        if (!window._currentUser || !window._currentUser.email) {
+          alert('Please sign in to access the dashboard.');
+          showLoginPage();
+          return;
+        }
+      
+        var page = this.getAttribute('data-page');
+        
+        // TRUE TAB REFRESH LOGIC
+        if (typeof scriptUrl !== 'undefined' && scriptUrl !== '') {
+          window.open(scriptUrl + "?page=" + page, "_top");
+        } else {
+          navigateTo(page);
+          var newUrl = updateQueryStringParameter(window.location.href, 'page', page);
+          window.history.pushState({page:page}, '', newUrl);
+        }
+      });
+    });
+
+    window.addEventListener('popstate', function(e){
+      var page = (e.state && e.state.page) ? e.state.page : (new URLSearchParams(window.location.search).get('page') || 'home');
+      if (window._currentUser && window._currentUser.email) navigateTo(page);
+    });
+  }
+
+  function updateQueryStringParameter(uri, key, value) {
+    var re = new RegExp("([?&])" + key + "=.*?(&|$)", "i");
+    var separator = uri.indexOf('?') !== -1 ? "&" : "?";
+    if (uri.match(re)) { return uri.replace(re, '$1' + key + "=" + value + '$2'); }
+    else { return uri + separator + key + "=" + value; }
+  }
+
+  function toggleSidebar(){
+    sidebarCollapsed = !sidebarCollapsed;
+    if (sidebarCollapsed) sidebar.classList.add('collapsed'); else sidebar.classList.remove('collapsed');
+    adjustHeaderCountsPosition();
+  }
+
+  function adjustHeaderCountsPosition(){
+    var counts = document.getElementById('headerCountsArea');
+    if (!counts) return;
+    counts.style.left = '0'; counts.style.width = '100%';
+    counts.style.paddingLeft = '18px'; counts.style.paddingRight = '18px';
+  }
+
+  function toggleProfileDropdown(e){
+    profileDropdown.classList.toggle('show');
+    profileDropdown.setAttribute('aria-hidden', profileDropdown.classList.contains('show') ? 'false' : 'true');
+  }
+
+  function logout(){
+    window._currentUser = null;
+    localStorage.removeItem('hd_logistics_session'); 
+    
+    document.getElementById('profileName').textContent = "Guest";
+    document.getElementById('profileDesignation').textContent = "";
+    document.getElementById('profileEmployeeId').textContent = "";
+    document.getElementById('profileEmail').textContent = "Not signed in";
+    document.getElementById('profileContact').textContent = "";
+    document.getElementById('profileJoining').textContent = "";
+    setAvatarInitials('G');
+    profileDropdown.classList.remove('show');
+    sidebar.classList.add('hidden');
+    topbar.classList.add('hidden');
+    headerCountsArea.style.display = 'none';
+    document.body.classList.remove('login-bg');
+    adjustHeaderCountsPosition();
+    showLoginPage();
+  }
+
+  function setUser(user, forceHome){
+    if(forceHome === undefined) forceHome = true;
+    window._currentUser = user;
+    localStorage.setItem('hd_logistics_session', JSON.stringify(user)); 
+
+    document.getElementById('profileName').textContent = user.name || user.email;
+    document.getElementById('profileEmail').textContent = user.email || '';
+    document.getElementById('profileDesignation').textContent = user.designation || '';
+    document.getElementById('profileEmployeeId').textContent = user.employeeId ? ('ID: ' + user.employeeId) : '';
+    document.getElementById('profileContact').textContent = user.contact || '';
+    document.getElementById('profileJoining').textContent = user.joiningDate || '';
+    
+    var initials = getInitials(user.name || user.email || '');
+    setAvatarInitials(initials);
+    
+    sidebar.classList.remove('hidden');
+    topbar.classList.remove('hidden');
+    headerCountsArea.style.display = 'flex';
+    document.body.classList.remove('login-bg');
+    adjustHeaderCountsPosition();
+    
+    if (forceHome) navigateTo('home');
+    else navigateTo(initialPage || 'home');
+  }
+
+  function getInitials(fullName){
+    if (!fullName) return 'G';
+    var parts = fullName.trim().split(/\s+/);
+    if (parts.length === 1) return parts[0].charAt(0).toUpperCase();
+    else {
+      var first = parts[0].charAt(0).toUpperCase();
+      var last = parts[parts.length-1].charAt(0).toUpperCase();
+      return (first + last).slice(0,2);
+    }
+  }
+
+  function setAvatarInitials(initials){
+    var avatar = document.getElementById('profileAvatar');
+    var avatarLarge = document.getElementById('profileAvatarLarge');
+    if (avatar) { avatar.innerHTML = initials; }
+    if (avatarLarge) { avatarLarge.innerHTML = initials; }
+  }
+
+  function showLoginPage(){
+    document.body.classList.add('login-bg');
+    appContainer.innerHTML = '';
+    var wrap = document.createElement('div');
+    wrap.className = 'login-wrap';
+    
+    wrap.innerHTML = '<div class="login-card">' +
+      '<div style="display:flex;justify-content:center;margin-bottom:8px;">' +
+        '<img src="' + logoData + '" style="width:120px;height:70px;border-radius:12px;object-fit:contain;" onerror="this.style.opacity=0.12;">' +
+      '</div>' +
+      '<h2>Sign in</h2>' +
+      '<div class="small" style="margin-bottom:8px;color:var(--muted);">Sign in to access H & D logistics dashboard</div>' +
+      '<label for="loginEmail">Email</label>' +
+      '<input id="loginEmail" class="input" style="width:100%;" type="email" placeholder="you@company.com" />' +
+      '<label for="loginPassword">Password</label>' +
+      '<input id="loginPassword" class="input" style="width:100%;" type="password" placeholder="Enter your password" />' +
+      '<div class="login-actions">' +
+        '<button class="btn" id="loginBtn" style="flex:1;">Login</button>' +
+        '<button class="btn secondary" id="googleSignInBtn" style="flex:1;">Sign in with Google</button>' +
+      '</div>' +
+      '<div class="login-footer">Use your account or sign in with Google</div>' +
+      '<div style="margin-top:10px;font-size:13px;color:var(--muted);">' +
+        '<em>© 2026 H & D Logistics. All Rights Reserved.</em><br/>' +
+        '<em>Managed by H & D Logistics.</em>' +
+      '</div>' +
+    '</div>';
+    
+    appContainer.appendChild(wrap);
+
+    document.getElementById('loginBtn').addEventListener('click', function(){
+      var email = document.getElementById('loginEmail').value.trim();
+      var password = document.getElementById('loginPassword').value;
+      if (!email || !password) { alert('Please enter email and password.'); return; }
+      
+      var btn = this;
+      btn.textContent = 'Verifying...'; btn.disabled = true;
+
+      google.script.run.withSuccessHandler(function(user){
+        setUser(user);
+      }).withFailureHandler(function(err){
+        btn.textContent = 'Login'; btn.disabled = false;
+        alert(err.message || 'Invalid credentials.');
+      }).validateCredentials(email, password);
+    });
+    
+    document.getElementById('googleSignInBtn').addEventListener('click', function(){
+      openGoogleAccountChooser();
+    });
+  }
+
+  function openGoogleAccountChooser(){
+    var popup = window.open('https://accounts.google.com/AccountChooser?service=wise', 'google_signin', 'width=520,height=600');
+    var pollInterval = 800;
+    var pollTimer = setInterval(function(){
+      try {
+        if (!popup || popup.closed) {
+          clearInterval(pollTimer);
+          google.script.run.withSuccessHandler(function(user){
+            if (user && user.email) {
+              google.script.run.withSuccessHandler(function(empList){
+                var match = empList.find(function(e){ return e.email && e.email.toLowerCase() === user.email.toLowerCase(); });
+                if (match) {
+                  setUser({ email: match.email, name: match.fullName || user.name, employeeId: match.employeeId, designation: match.designation, contact: match.contact, joiningDate: match.joiningDate });
+                } else {
+                  setUser({ email: user.email, name: user.name || user.email.split('@')[0] });
+                }
+              }).getEmployees();
+            } else {
+              alert('Google account not detected. Please select an account in the popup and try again.');
+            }
+          }).getCurrentUser();
+        }
+      } catch (e) { }
+    }, pollInterval);
+    if (!popup) alert('Popup blocked. Please allow popups for this site and try "Sign in with Google" again.');
+  }
+
+  function loadHeaderCountsForMonth(year, month){
+    var start = formatDateISO(new Date(year, month-1, 1));
+    var end = formatDateISO(new Date(year, month, daysInMonth(year, month)));
+    google.script.run.withSuccessHandler(function(counts){
+      document.getElementById('hdrPresent').textContent = counts.Present || 0;
+      document.getElementById('hdrAbsent').textContent = counts.Absent || 0;
+      document.getElementById('hdrLeave').textContent = counts.Leave || 0;
+      document.getElementById('hdrWO').textContent = counts.WeeklyOff || 0;
+    }).getCountsForDateRange(start, end);
+  }
+
+  function navigateTo(page) {
+    navItems.forEach(function(a){ a.classList.remove('active'); });
+    var active = document.querySelector('.nav-item[data-page="'+page+'"]');
+    if (active) active.classList.add('active');
+    
+    var mapping = {
+      home: {title:'Home', subtitle:'Overview'},
+      attendance: {title:'Attendance', subtitle:'Mark attendance for today'},
+      summaryview: {title:'Summary View', subtitle:'Monthly matrix'},
+      employeeregistration: {title:'Employee Registration', subtitle:'Add new employee'},
+      employeesepration: {title:'Employee Separation', subtitle:'Remove employee'},
+      calendar: {title:'Calendar', subtitle:'Holidays & Today'},
+      reports: {title:'Reports', subtitle:'Export attendance reports'}
+    };
+    
+    var meta = mapping[page] || mapping.home;
+    pageTitle.textContent = meta.title;
+    pageSubtitle.textContent = meta.subtitle;
+    
+    if (page === 'home' || page === 'attendance' || page === 'summaryview') {
+      headerCountsArea.style.display = 'flex'; adjustHeaderCountsPosition();
+    } else {
+      headerCountsArea.style.display = 'none';
+    }
+
+    if (page === 'home') renderHome();
+    else if (page === 'attendance') renderAttendance();
+    else if (page === 'summaryview') renderSummaryView();
+    else if (page === 'employeeregistration') renderEmployeeRegistration();
+    else if (page === 'employeesepration') renderEmployeeSepration();
+    else if (page === 'calendar') renderCalendar();
+    else if (page === 'reports') renderReports();
+    else renderHome();
+  }
+
+  function loadGoogleCharts(callback) {
+    if (googleChartsLoaded) { if (typeof callback === 'function') callback(); return; }
+    if (typeof callback === 'function') googleChartsCallbacks.push(callback);
+    if (googleChartsLoading) return;
+    googleChartsLoading = true;
+    
+    if (window.google && google.charts && google.visualization) {
+      googleChartsLoaded = true; googleChartsLoading = false;
+      while (googleChartsCallbacks.length) { var cb = googleChartsCallbacks.shift(); try { cb(); } catch (e) { } } return;
+    }
+
+    var script = document.createElement('script');
+    script.src = "https://www.gstatic.com/charts/loader.js";
+    script.async = true; script.defer = true;
+    script.onload = function() {
+      try {
+        google.charts.load('current', { packages: ['corechart', 'bar'] });
+        google.charts.setOnLoadCallback(function() {
+          googleChartsLoaded = true; googleChartsLoading = false;
+          while (googleChartsCallbacks.length) { var cb = googleChartsCallbacks.shift(); try { cb(); } catch (e) {} }
+        });
+      } catch (err) { googleChartsLoading = false; }
+    };
+    document.head.appendChild(script);
+  }
+
+  var _chartRedrawTimer = null;
+  function scheduleRedrawAllCharts(delay) {
+    if (delay === undefined) delay = 200;
+    if (_chartRedrawTimer) clearTimeout(_chartRedrawTimer);
+    _chartRedrawTimer = setTimeout(function() { try { drawAllChartsFromCache(); } catch (e) { } }, delay);
+  }
+
+  function drawAllChartsFromCache() {
+    if (!lastSummary || !lastSummary.summary) return;
+    loadGoogleCharts(function() {
+      try {
+        drawComboChart(lastSummary.summary); drawPieChart(lastSummary.summary);
+        drawLineChart(lastSummary.summary); drawBarChart(lastSummary.summary);
+      } catch (e) { }
+    });
+  }
+
+  function ensureChartContainer(id) {
+    var el = document.getElementById(id);
+    if (!el) return false;
+    el.innerHTML = ''; return true;
+  }
+
+  function renderHome(){
+    appContainer.innerHTML = '';
+    var container = document.createElement('div');
+    
+    container.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+        '<div style="font-weight:700;font-size:18px;">Overview</div>' +
+        '<div class="small" style="display:flex; gap:8px; align-items:center;">Month:' +
+          '<select id="homeMonth" class="input" style="padding:6px 10px;"></select>' +
+          '<select id="homeYear" class="input" style="padding:6px 10px;"></select>' +
+          '<button class="btn small" id="homeLoad">Load</button>' +
+        '</div>' +
+      '</div>' +
+      '<div id="homeCharts" style="margin-top:12px;">' +
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">' +
+          '<div class="card"><div class="title">Daily Status (Combo)</div><div id="comboChartArea" style="height:320px;"></div></div>' +
+          '<div class="card"><div class="title">Status Distribution (Pie)</div><div id="pieChartArea" style="height:320px;"></div></div>' +
+          '<div class="card"><div class="title">Present Trend (Line)</div><div id="lineChartArea" style="height:320px;"></div></div>' +
+          '<div class="card"><div class="title">Weekly Status (Bar)</div><div id="barChartArea" style="height:320px;"></div></div>' +
+        '</div>' +
+      '</div>';
+      
+    appContainer.appendChild(container);
+
+    var monthSel = document.getElementById('homeMonth'); 
+    var yearSel = document.getElementById('homeYear'); 
+    var today = new Date();
+    
+    for (var m=1;m<=12;m++){ var opt = document.createElement('option'); opt.value=m; opt.textContent=m; if (m===today.getMonth()+1) opt.selected=true; monthSel.appendChild(opt); }
+    for (var y=today.getFullYear()-2;y<=today.getFullYear()+1;y++){ var opt2 = document.createElement('option'); opt2.value=y; opt2.textContent=y; if (y===today.getFullYear()) opt2.selected=true; yearSel.appendChild(opt2); }
+
+    document.getElementById('homeLoad').addEventListener('click', function(){
+      var sm = parseInt(monthSel.value), sy = parseInt(yearSel.value);
+      loadHeaderCountsForMonth(sy,sm); loadAndDrawCharts(sy,sm);
+    });
+    loadHeaderCountsForMonth(today.getFullYear(), today.getMonth()+1);
+    loadAndDrawCharts(today.getFullYear(), today.getMonth()+1);
+  }
+
+  function loadAndDrawCharts(year, month){
+    google.script.run.withSuccessHandler(function(summary){
+      lastSummary = { year: year, month: month, summary: summary };
+      loadGoogleCharts(function(){
+        drawComboChart(summary); drawPieChart(summary); drawLineChart(summary); drawBarChart(summary);
+      });
+    }).getSummaryMatrix(year, month);
+  }
+
+  function drawComboChart(summary){
+    if (!ensureChartContainer('comboChartArea')) return;
+    if (!window.google || !google.visualization) { loadGoogleCharts(function(){ drawComboChart(summary); }); return; }
+    var data = new google.visualization.DataTable();
+    data.addColumn('string', 'Day'); data.addColumn('number', 'Present'); data.addColumn('number', 'Absent'); data.addColumn('number', 'Leave'); data.addColumn('number', 'W/O'); data.addColumn({type:'string', role:'tooltip', 'p': {'html': true}});
+    var days = summary.days;
+    days.forEach(function(d, idx){
+      var p=0,a=0,l=0,w=0;
+      summary.matrix.forEach(function(r){
+        var s = (r.days[idx] || "").toUpperCase();
+        if (s==='P') p++; else if (s==='A') a++; else if (s==='L') l++; else if (s==='W/O' || s==='WO') w++;
+      });
+      var tooltip = makeTooltipHtml('Day ' + d, 'Present: ' + p + '<br>Absent: ' + a + '<br>Leave: ' + l + '<br>W/O: ' + w);
+      data.addRow([String(d), p, a, l, w, tooltip]);
+    });
+    var options = { height: 320, seriesType: 'bars', series: {3: {type: 'line', color:'#0b63d6'}}, legend: { position: 'top' }, chartArea: { left:50, top:40, width:'85%', height:'70%' }, colors: ['#16a34a','#ef4444','#f59e0b','#64748b'], vAxis: { minValue: 0 }, tooltip: { isHtml: true }, backgroundColor: 'transparent' };
+    new google.visualization.ComboChart(document.getElementById('comboChartArea')).draw(data, options);
+  }
+
+  function drawPieChart(summary){
+    if (!ensureChartContainer('pieChartArea')) return;
+    if (!window.google || !google.visualization) { loadGoogleCharts(function(){ drawPieChart(summary); }); return; }
+    var totals = {P:0,A:0,L:0,WO:0};
+    summary.matrix.forEach(function(r){ totals.P += r.totals.P; totals.A += r.totals.A; totals.L += r.totals.L; totals.WO += r.totals.WO; });
+    var data = new google.visualization.DataTable();
+    data.addColumn('string','Status'); data.addColumn('number','Count'); data.addColumn({type:'string', role:'tooltip', 'p': {'html': true}});
+    data.addRows([
+      ['Present', totals.P, makeTooltipHtml('Present', 'Count: ' + totals.P)], ['Absent', totals.A, makeTooltipHtml('Absent', 'Count: ' + totals.A)],
+      ['Leave', totals.L, makeTooltipHtml('Leave', 'Count: ' + totals.L)], ['Weekly Off', totals.WO, makeTooltipHtml('Weekly Off', 'Count: ' + totals.WO)]
+    ]);
+    var options = { pieHole: 0.36, legend: { position: 'right', alignment: 'center' }, height: 320, chartArea: { left:20, top:20, width:'70%', height:'75%' }, colors: ['#16a34a','#ef4444','#f59e0b','#64748b'], tooltip: { isHtml: true }, pieSliceText: 'value', backgroundColor: 'transparent' };
+    new google.visualization.PieChart(document.getElementById('pieChartArea')).draw(data, options);
+  }
+
+  function drawLineChart(summary){
+    if (!ensureChartContainer('lineChartArea')) return;
+    if (!window.google || !google.visualization) { loadGoogleCharts(function(){ drawLineChart(summary); }); return; }
+    var data = new google.visualization.DataTable();
+    data.addColumn('string','Day'); data.addColumn('number','Present'); data.addColumn('number','Absent'); data.addColumn('number','Leave'); data.addColumn('number','W/O');
+    summary.days.forEach(function(d, idx){
+      var p=0,a=0,l=0,w=0;
+      summary.matrix.forEach(function(r){ var s = (r.days[idx] || "").toUpperCase(); if (s==='P') p++; else if (s==='A') a++; else if (s==='L') l++; else if (s==='W/O' || s==='WO') w++; });
+      data.addRow([String(d), p, a, l, w]);
+    });
+    var options = { height: 320, chartArea: { left:50, top:40, width:'85%', height:'70%' }, legend: { position: 'top' }, colors: ['#16a34a','#ef4444','#f59e0b','#64748b'], curveType: 'function', vAxis: { minValue: 0 }, tooltip: { isHtml: true }, backgroundColor: 'transparent' };
+    new google.visualization.LineChart(document.getElementById('lineChartArea')).draw(data, options);
+  }
+
+  function drawBarChart(summary){
+    if (!ensureChartContainer('barChartArea')) return;
+    if (!window.google || !google.visualization) { loadGoogleCharts(function(){ drawBarChart(summary); }); return; }
+    var data = new google.visualization.DataTable();
+    data.addColumn('string','Week'); data.addColumn('number','Present'); data.addColumn('number','Absent'); data.addColumn('number','Leave'); data.addColumn('number','W/O'); data.addColumn({type:'string', role:'tooltip', 'p': {'html': true}});
+    var totalDays = summary.days.length; var weekCount = Math.ceil(totalDays / 7);
+    for (var w=0; w<weekCount; w++){
+      var p=0,a=0,l=0,wo=0; var start = w*7; var end = Math.min((w+1)*7, totalDays);
+      for (var di=start; di<end; di++){
+        summary.matrix.forEach(function(r){ var s = (r.days[di] || "").toUpperCase(); if (s==='P') p++; else if (s==='A') a++; else if (s==='L') l++; else if (s==='W/O' || s==='WO') wo++; });
+      }
+      var tooltip = makeTooltipHtml('Week ' + (w+1), 'Present: ' + p + '<br>Absent: ' + a + '<br>Leave: ' + l + '<br>W/O: ' + wo);
+      data.addRow(['W' + (w+1), p, a, l, wo, tooltip]);
+    }
+    var options = { height: 320, chartArea: { left:60, top:40, width:'85%', height:'70%' }, legend: { position: 'top' }, colors: ['#16a34a','#ef4444','#f59e0b','#64748b'], vAxis: { minValue: 0 }, tooltip: { isHtml: true }, isStacked: false, backgroundColor: 'transparent' };
+    new google.visualization.ColumnChart(document.getElementById('barChartArea')).draw(data, options);
+  }
+
+  function makeTooltipHtml(title, text){
+    return '<div style="padding:8px 10px;max-width:260px;font-family:Arial,Helvetica,sans-serif;">' +
+           '<div style="font-weight:700;margin-bottom:6px;">'+escapeHtml(title)+'</div>' +
+           '<div style="font-size:13px;color:#374151;">'+text+'</div></div>';
+  }
+  function escapeHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+  function renderAttendance(){
+    appContainer.innerHTML = '';
+    var container = document.createElement('div');
+    
+    container.innerHTML = '<div style="display:flex;gap:12px;align-items:center;">' +
+        '<div style="font-weight:700;">Mark Attendance for Today</div>' +
+        '<div class="small" id="todayDate"></div>' +
+        '<button class="btn small" id="submitAttendance">Submit</button>' +
+      '</div>' +
+      '<div class="table" style="margin-top:12px;">' +
+        '<div style="display:flex;gap:12px;align-items:center;margin-bottom:12px;">' +
+          '<input type="checkbox" id="selectAll"> <label for="selectAll" class="small">Select All</label>' +
+          '<select id="statusSelect" class="input" style="padding: 6px 12px; font-size:13px;">' +
+            '<option value="P">Present</option><option value="A">Absent</option>' +
+            '<option value="L">Leave</option><option value="W/O">Weekly Off</option>' +
+          '</select>' +
+        '</div>' +
+        '<div id="employeeList" class="employee-list"></div>' +
+      '</div>';
+      
+    appContainer.appendChild(container);
+    var today = new Date(); document.getElementById('todayDate').textContent = formatDateISO(today);
+    loadHeaderCountsForMonth(today.getFullYear(), today.getMonth()+1);
+    
+    google.script.run.withSuccessHandler(renderEmployeeList).getEmployees();
+    var ds = formatDateISO(new Date());
+    
+    google.script.run.withSuccessHandler(function(attList){
+      window._todayAttendance = attList.reduce(function(m,a){m[a.employeeId]=a.status;return m;},{});
+      if (document.getElementById('employeeList').children.length>0) {
+        document.querySelectorAll('.employee-item').forEach(function(it){
+          var eid = it.getAttribute('data-eid');
+          it.querySelector('.status').textContent = window._todayAttendance[eid] || 'Pending';
+        });
+      }
+    }).getAttendanceForDate(ds);
+    
+    document.getElementById('selectAll').addEventListener('change', function(){
+      var checked = this.checked;
+      document.querySelectorAll('.employee-checkbox').forEach(function(cb){cb.checked = checked;});
+    });
+    
+    document.getElementById('submitAttendance').addEventListener('click', function(){
+      var status = document.getElementById('statusSelect').value;
+      var selections = [];
+      document.querySelectorAll('.employee-checkbox:checked').forEach(function(cb){
+        selections.push({employeeId: cb.getAttribute('data-eid'), status: status});
+      });
+      if (selections.length === 0) { alert('Please select at least one employee.'); return; }
+      var ds = formatDateISO(new Date());
+      google.script.run.withSuccessHandler(function(res){
+        alert(res.message || 'Attendance Marked Successfully');
+        navigateTo('attendance');
+      }).markAttendanceBulk(ds, selections);
+    });
+  }
+
+  function renderEmployeeList(list){
+    var container = document.getElementById('employeeList'); container.innerHTML = '';
+    var todayMap = window._todayAttendance || {};
+    list.forEach(function(emp){
+      var div = document.createElement('div');
+      div.className = 'employee-item'; div.setAttribute('data-eid', emp.employeeId);
+      div.style.display = 'flex'; div.style.justifyContent = 'space-between'; div.style.alignItems = 'center';
+      div.style.padding = '12px 10px'; div.style.borderBottom = '1px solid #e2e8f0';
+      
+      div.innerHTML = '<div style="display:flex;gap:12px;align-items:center;">' +
+          '<input type="checkbox" class="employee-checkbox" data-eid="' + emp.employeeId + '">' +
+          '<div><div style="font-weight:600;">' + emp.fullName + '</div><div class="small">' + (emp.designation || '') + ' • ' + emp.employeeId + '</div></div>' +
+        '</div>' +
+        '<div style="text-align:right;"><div class="status small" style="font-weight:600; padding:4px 8px; background:rgba(255,255,255,0.5); border-radius:6px; border:1px solid #e2e8f0;">' + (todayMap[emp.employeeId] || 'Pending') + '</div></div>';
+        
+      container.appendChild(div);
+    });
+  }
+
+  function renderEmployeeRegistration(){
+    appContainer.innerHTML = '';
+    var container = document.createElement('div');
+    
+    container.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+        '<div style="font-weight:700;font-size:18px;">Employee Registration</div>' +
+        '<div class="muted">Add new employee to the system</div>' +
+      '</div>' +
+      '<div style="margin-top:12px;">' +
+        '<div class="card">' +
+          '<div class="form-grid">' +
+            '<div class="form-row"><label class="muted">Employee ID</label><input id="empId" class="input" placeholder="E.g. EMP001"></div>' +
+            '<div class="form-row"><label class="muted">Full Name</label><input id="fullName" class="input" placeholder="Full name"></div>' +
+            '<div class="form-row"><label class="muted">Designation</label><input id="designation" class="input" placeholder="Designation"></div>' +
+            '<div class="form-row"><label class="muted">Joining Date</label><input id="joiningDate" class="input" type="date"></div>' +
+            '<div class="form-row"><label class="muted">Contact</label><input id="contact" class="input" placeholder="+91 9XXXXXXXXX"></div>' +
+            '<div class="form-row"><label class="muted">Email</label><input id="email" class="input" type="email" placeholder="employee@company.com"></div>' +
+            '<div class="form-row full-width"><label class="muted">Password</label><input id="password" class="input" type="password" placeholder="Set a password"></div>' +
+            '<div class="form-row full-width" style="display:flex;justify-content:flex-end;">' +
+              '<button class="btn" id="addEmpBtn">Register Employee</button>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+      '<div style="margin-top:18px;">' +
+        '<div style="font-weight:700;">Existing Employees</div>' +
+        '<div id="existingEmployees" class="table" style="margin-top:8px;"></div>' +
+      '</div>';
+      
+    appContainer.appendChild(container);
+
+    document.getElementById('addEmpBtn').addEventListener('click', function(){
+      var emp = {
+        EmployeeID: document.getElementById('empId').value.trim(), FullName: document.getElementById('fullName').value.trim(),
+        Designation: document.getElementById('designation').value.trim(), JoiningDate: document.getElementById('joiningDate').value,
+        Contact: document.getElementById('contact').value.trim(), Email: document.getElementById('email').value.trim(), Password: document.getElementById('password').value
+      };
+      if (!emp.EmployeeID || !emp.FullName) { alert('EmployeeID and Full Name are required'); return; }
+      google.script.run.withSuccessHandler(function(res){
+        alert(res.message || 'Employee registered'); renderEmployeeRegistration();
+      }).withFailureHandler(function(err){ alert(err.message || err); }).registerEmployee(emp);
+    });
+    
+    google.script.run.withSuccessHandler(function(list){
+      var el = document.getElementById('existingEmployees'); el.innerHTML = '';
+      list.forEach(function(emp){
+        var row = document.createElement('div');
+        row.style.display='flex';row.style.justifyContent='space-between';row.style.padding='10px';row.style.borderBottom='1px solid #e2e8f0';
+        row.innerHTML = '<div><strong style="color:#1e293b;">'+emp.fullName+'</strong><div class="small">'+emp.employeeId+' • '+(emp.designation||'')+'</div></div><div><button data-eid="'+emp.employeeId+'" class="btn secondary small removeEmp">Remove</button></div>';
+        el.appendChild(row);
+      });
+      document.querySelectorAll('.removeEmp').forEach(function(b){
+        b.addEventListener('click', function(){
+          var eid = this.getAttribute('data-eid');
+          if (confirm('Remove employee ' + eid + '?')) {
+            google.script.run.withSuccessHandler(function(res){ alert(res.message || 'Removed'); renderEmployeeRegistration();
+            }).withFailureHandler(function(err){ alert(err.message || err); }).removeEmployee(eid);
+          }
+        });
+      });
+    }).getEmployees();
+  }
+
+  function renderEmployeeSepration(){
+    appContainer.innerHTML = '';
+    var container = document.createElement('div');
+    var headerRow = document.createElement('div');
+    headerRow.style.display = 'flex'; headerRow.style.justifyContent = 'space-between'; headerRow.style.alignItems = 'center';
+    var titleDiv = document.createElement('div'); titleDiv.style.fontWeight = '700'; titleDiv.style.fontSize = '18px'; titleDiv.textContent = 'Employee Separation';
+    var controlsDiv = document.createElement('div'); controlsDiv.style.display = 'flex'; controlsDiv.style.gap = '8px'; controlsDiv.style.alignItems = 'center';
+    var searchInput = document.createElement('input'); searchInput.id = 'sepSearch'; searchInput.className = 'input'; searchInput.placeholder = 'Search employees...'; searchInput.style.width = '260px';
+    var refreshBtn = document.createElement('button'); refreshBtn.className = 'btn small secondary'; refreshBtn.id = 'refreshSep'; refreshBtn.textContent = 'Refresh';
+
+    controlsDiv.appendChild(searchInput); controlsDiv.appendChild(refreshBtn);
+    headerRow.appendChild(titleDiv); headerRow.appendChild(controlsDiv);
+
+    var listWrapper = document.createElement('div'); listWrapper.style.marginTop = '12px';
+    var tableDiv = document.createElement('div'); tableDiv.id = 'separationList'; tableDiv.className = 'table';
+    listWrapper.appendChild(tableDiv); container.appendChild(headerRow); container.appendChild(listWrapper); appContainer.appendChild(container);
+
+    function loadAndRender(){
+      var listEl = document.getElementById('separationList');
+      listEl.innerHTML = '<div style="padding:12px;">Loading employees...</div>';
+      google.script.run.withSuccessHandler(function(list){
+        window._sepEmployeeList = list || []; renderSepList(window._sepEmployeeList);
+      }).getEmployees();
+    }
+
+    function renderSepList(list){
+      var listEl = document.getElementById('separationList'); listEl.innerHTML = '';
+      if (!list || list.length === 0) { listEl.innerHTML = '<div style="padding:12px;">No employees found.</div>'; return; }
+      var header = document.createElement('div'); header.style.display = 'grid'; header.style.gridTemplateColumns = '120px 240px 160px 140px 160px 180px 120px'; header.style.gap = '8px'; header.style.padding = '10px'; header.style.fontWeight = '700'; header.style.borderBottom = '1px solid #cbd5e1';
+      var hcols = ['ID','Full Name','Designation','Joining Date','Contact','Email','Action'];
+      for (var hi=0; hi<hcols.length; hi++){ var hd = document.createElement('div'); hd.textContent = hcols[hi]; if (hi === hcols.length-1) hd.style.textAlign = 'right'; header.appendChild(hd); }
+      listEl.appendChild(header);
+
+      for (var i=0; i<list.length; i++){
+        var emp = list[i]; var row = document.createElement('div');
+        row.style.display = 'grid'; row.style.gridTemplateColumns = '120px 240px 160px 140px 160px 180px 120px'; row.style.gap = '8px'; row.style.alignItems = 'center'; row.style.padding = '12px 10px'; row.style.borderBottom = '1px solid #e2e8f0';
+
+        var idDiv = document.createElement('div'); idDiv.textContent = emp.employeeId || '';
+        var nameDiv = document.createElement('div'); nameDiv.textContent = emp.fullName || '';
+        var desigDiv = document.createElement('div'); desigDiv.textContent = emp.designation || '';
+        var joinDiv = document.createElement('div'); joinDiv.textContent = emp.joiningDate || '';
+        var contactDiv = document.createElement('div'); contactDiv.textContent = emp.contact || '';
+        var emailDiv = document.createElement('div'); emailDiv.textContent = emp.email || '';
+        var actionDiv = document.createElement('div'); actionDiv.style.textAlign = 'right';
+        var removeBtn = document.createElement('button'); removeBtn.className = 'btn danger small'; removeBtn.textContent = 'Remove'; removeBtn.setAttribute('data-eid', emp.employeeId || '');
+        
+        (function(empCopy){
+          removeBtn.addEventListener('click', function(){
+            var eid = this.getAttribute('data-eid');
+            if (!eid || !confirm('Permanently remove employee ' + (empCopy.fullName || eid) + ' (' + eid + ')?')) return;
+            google.script.run.withSuccessHandler(function(res){ alert(res.message || 'Removed'); loadAndRender(); }).withFailureHandler(function(err){ alert(err.message || 'Failed to remove employee.'); }).removeEmployee(eid);
+          });
+        })(emp);
+
+        actionDiv.appendChild(removeBtn);
+        row.appendChild(idDiv); row.appendChild(nameDiv); row.appendChild(desigDiv); row.appendChild(joinDiv); row.appendChild(contactDiv); row.appendChild(emailDiv); row.appendChild(actionDiv);
+        listEl.appendChild(row);
+      }
+    }
+
+    document.getElementById('sepSearch').addEventListener('input', function(){
+      var q = this.value.trim().toLowerCase(); var all = window._sepEmployeeList || [];
+      if (!q) { renderSepList(all); return; }
+      var filtered = all.filter(function(e){ return (e.employeeId || '').toLowerCase().indexOf(q) !== -1 || (e.fullName || '').toLowerCase().indexOf(q) !== -1 || (e.email || '').toLowerCase().indexOf(q) !== -1 || (e.designation || '').toLowerCase().indexOf(q) !== -1 || (e.contact || '').toLowerCase().indexOf(q) !== -1; });
+      renderSepList(filtered);
+    });
+    document.getElementById('refreshSep').addEventListener('click', loadAndRender);
+    loadAndRender();
+  }
+
+  function renderCalendar(){
+    appContainer.innerHTML = '';
+    var container = document.createElement('div');
+    
+    container.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+        '<div style="font-weight:700;">Calendar</div>' +
+        '<div class="small" style="display:flex; gap:8px; align-items:center;">Month:' +
+          '<select id="calMonth" class="input" style="padding:6px 10px;"></select>' +
+          '<select id="calYear" class="input" style="padding:6px 10px;"></select>' +
+          '<button class="btn small" id="calLoad">Load</button>' +
+        '</div>' +
+      '</div>' +
+      '<div style="margin-top:12px;" id="calendarArea"></div>';
+      
+    appContainer.appendChild(container);
+
+    var monthSel = document.getElementById('calMonth'); var yearSel = document.getElementById('calYear'); var today = new Date();
+    for (var m=1;m<=12;m++){ var opt = document.createElement('option'); opt.value=m; opt.textContent=m; if (m===today.getMonth()+1) opt.selected=true; monthSel.appendChild(opt); }
+    for (var y=today.getFullYear()-2;y<=today.getFullYear()+2;y++){ var opt2 = document.createElement('option'); opt2.value=y; opt2.textContent=y; if (y===today.getFullYear()) opt2.selected=true; yearSel.appendChild(opt2); }
+
+    document.getElementById('calLoad').addEventListener('click', function(){
+      var sm = parseInt(monthSel.value), sy = parseInt(yearSel.value);
+      loadCalendar(sy,sm);
+    });
+    loadCalendar(today.getFullYear(), today.getMonth()+1);
+  }
+
+  function loadCalendar(year, month){
+    google.script.run.withSuccessHandler(function(holidays){ renderCalendarGrid(year, month, holidays); }).getHolidays();
+  }
+
+  function renderCalendarGrid(year, month, holidays){
+    var area = document.getElementById('calendarArea'); area.innerHTML = '';
+    var wrapper = document.createElement('div'); wrapper.className = 'calendar-wrap';
+    var weekdays = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    var headerRow = document.createElement('div'); headerRow.className = 'calendar-grid';
+    
+    weekdays.forEach(function(w){
+      var h = document.createElement('div'); h.className = 'cal-cell'; h.style.fontWeight = '700'; h.style.textAlign = 'center'; h.style.minHeight = 'auto'; h.style.padding = '12px'; h.textContent = w; headerRow.appendChild(h);
+    });
+    wrapper.appendChild(headerRow);
+
+    var first = new Date(year, month-1, 1); var startDay = first.getDay(); var totalDays = new Date(year, month, 0).getDate();
+    var today = new Date(); var todayStr = formatDateISO(today);
+
+    var cells = [];
+    for (var i=0;i<startDay;i++) cells.push(null);
+    for (var d=1; d<=totalDays; d++) cells.push(d);
+    while (cells.length % 7 !== 0) cells.push(null);
+
+    var grid = document.createElement('div'); grid.className = 'calendar-grid';
+    var holidaySet = {}; holidays.forEach(function(h) { holidaySet[h.date] = h.name || ''; });
+    
+    cells.forEach(function(val) {
+      var cell = document.createElement('div'); cell.className = 'cal-cell cal-weekday';
+      if (val === null) { cell.style.background = 'transparent'; cell.style.boxShadow = 'none'; cell.style.border = 'none'; } 
+      else {
+        var dateObj = new Date(year, month-1, val); var dateStr = formatDateISO(dateObj); var dayOfWeek = dateObj.getDay();
+        if (dayOfWeek === 0) cell.className = 'cal-cell cal-sunday';
+        if (holidaySet[dateStr]) cell.className = 'cal-cell cal-holiday';
+        if (dateStr === todayStr) cell.className = 'cal-cell cal-today';
+
+        var num = document.createElement('div'); num.className = 'date-num'; num.textContent = val; cell.appendChild(num);
+        var content = document.createElement('div'); content.style.marginTop = '6px';
+        if (holidaySet[dateStr]) {
+          var h = document.createElement('div'); h.style.fontWeight = '600'; h.style.color = '#065f46'; h.style.fontSize = '12px'; h.style.marginTop = '15px'; h.textContent = holidaySet[dateStr]; content.appendChild(h);
+        } else { content.innerHTML = '<div class="small"> </div>'; }
+        cell.appendChild(content);
+      }
+      grid.appendChild(cell);
+    });
+
+    wrapper.appendChild(grid); area.appendChild(wrapper);
+  }
+
+  function renderSummaryView(){
+    appContainer.innerHTML = '';
+    var container = document.createElement('div');
+    
+    container.innerHTML = '<div style="display:flex;gap:12px;align-items:center;">' +
+        '<div style="font-weight:700;">Summary View</div>' +
+        '<div class="small" style="display:flex; gap:8px; align-items:center; margin-left:auto;">Month:' +
+          '<select id="summaryMonth" class="input" style="padding:6px 10px;"></select>' +
+          '<select id="summaryYear" class="input" style="padding:6px 10px;"></select>' +
+          '<button class="btn small" id="loadSummary">Load</button>' +
+        '</div>' +
+      '</div>' +
+      '<div style="margin-top:12px;" id="summaryMatrixArea"></div>';
+      
+    appContainer.appendChild(container);
+    
+    var monthSel = document.getElementById('summaryMonth'); var yearSel = document.getElementById('summaryYear'); var today = new Date();
+    for (var m=1;m<=12;m++){ var opt = document.createElement('option'); opt.value=m; opt.textContent=m; if (m===today.getMonth()+1) opt.selected=true; monthSel.appendChild(opt); }
+    for (var y=today.getFullYear()-2;y<=today.getFullYear()+1;y++){ var opt2 = document.createElement('option'); opt2.value=y; opt2.textContent=y; if (y===today.getFullYear()) opt2.selected=true; yearSel.appendChild(opt2); }
+    
+    document.getElementById('loadSummary').addEventListener('click', function(){
+      var sm = parseInt(monthSel.value), sy = parseInt(yearSel.value);
+      loadHeaderCountsForMonth(sy,sm);
+      google.script.run.withSuccessHandler(renderSummaryMatrix).getSummaryMatrix(sy,sm);
+    });
+    
+    loadHeaderCountsForMonth(today.getFullYear(), today.getMonth()+1);
+    google.script.run.withSuccessHandler(renderSummaryMatrix).getSummaryMatrix(today.getFullYear(), today.getMonth()+1);
+  }
+
+  function renderSummaryMatrix(data){
+    var area = document.getElementById('summaryMatrixArea'); area.innerHTML = '';
+    var wrapper = document.createElement('div'); wrapper.className='matrix';
+    var table = document.createElement('table'); table.className='matrix-table';
+    var thead = document.createElement('thead'); var trh = document.createElement('tr');
+    var thName = document.createElement('th'); thName.textContent = 'Name'; trh.appendChild(thName);
+    
+    var sundayCols = {}; var year = data.year; var month = data.month;
+    data.days.forEach(function(d){ var dt = new Date(year, month-1, d); if (dt.getDay() === 0) sundayCols[d] = true; });
+    data.days.forEach(function(d){
+      var th = document.createElement('th'); var dt = new Date(data.year, data.month-1, d);
+      var weekday = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dt.getDay()];
+      th.textContent = String(d) + ' (' + weekday + ')';
+      if (sundayCols[d]) th.className = 'matrix-sunday-header';
+      trh.appendChild(th);
+    });
+
+    trh.appendChild(td('th','P')); trh.appendChild(td('th','A')); trh.appendChild(td('th','L')); trh.appendChild(td('th','W/O'));
+    thead.appendChild(trh); table.appendChild(thead);
+
+    var tbody = document.createElement('tbody');
+    data.matrix.forEach(function(r){
+      var tr = document.createElement('tr'); tr.appendChild(td('td',r.fullName));
+      r.days.forEach(function(s, idx){
+        var dayNum = data.days[idx]; var cell = td('td', s || '');
+        if (s === 'P') cell.style.color = '#16a34a'; else if (s === 'A') cell.style.color = '#ef4444'; else if (s === 'L') cell.style.color = '#f59e0b'; else if (s === 'W/O' || s === 'WO') cell.style.color = '#64748b';
+        if (sundayCols[dayNum]) cell.className = 'matrix-sunday-cell';
+        tr.appendChild(cell);
+      });
+      tr.appendChild(td('td',r.totals.P)); tr.appendChild(td('td',r.totals.A)); tr.appendChild(td('td',r.totals.L)); tr.appendChild(td('td',r.totals.WO));
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody); wrapper.appendChild(table); area.appendChild(wrapper);
+  }
+
+  function renderReports(){
+    appContainer.innerHTML = '';
+    var container = document.createElement('div');
+    
+    container.innerHTML = '<div style="display:flex;gap:12px;align-items:center; flex-wrap:wrap;">' +
+        '<div style="font-weight:700; margin-right:auto;">Reports</div>' +
+        '<div class="small" style="display:flex; gap:8px; align-items:center;">Month:' +
+          '<select id="reportMonth" class="input" style="padding:6px 10px;"></select>' +
+          '<select id="reportYear" class="input" style="padding:6px 10px;"></select>' +
+        '</div>' +
+      '</div>' +
+      '<div class="card" style="margin-top:16px;">' +
+        '<div style="font-weight:600; margin-bottom:12px;">Export Options</div>' +
+        '<div style="display:flex; gap:12px; flex-wrap:wrap;">' +
+            '<button class="btn" id="exportBtnSheet">Export to Google Sheet</button>' +
+            '<button class="btn secondary" id="exportBtnCSV">Download CSV</button>' +
+            '<button class="btn secondary" id="exportBtnExcel">Download Excel</button>' +
+        '</div>' +
+      '</div>' +
+      '<div id="reportArea" style="margin-top:16px;"></div>';
+      
+    appContainer.appendChild(container);
+    
+    var monthSel = document.getElementById('reportMonth'); var yearSel = document.getElementById('reportYear'); var today = new Date();
+    for (var m=1;m<=12;m++){ var opt = document.createElement('option'); opt.value=m; opt.textContent=m; if (m===today.getMonth()+1) opt.selected=true; monthSel.appendChild(opt); }
+    for (var y=today.getFullYear()-2;y<=today.getFullYear()+1;y++){ var opt2 = document.createElement('option'); opt2.value=y; opt2.textContent=y; if (y===today.getFullYear()) opt2.selected=true; yearSel.appendChild(opt2); }
+    
+    function triggerExport(format) {
+      var sm = parseInt(monthSel.value), sy = parseInt(yearSel.value);
+      var repArea = document.getElementById('reportArea');
+      repArea.innerHTML = '<span class="small">Generating file... Please wait.</span>';
+      
+      google.script.run.withSuccessHandler(function(res){
+        if (res && res.url) {
+          var downloadUrl = res.url;
+          if (format === 'csv') downloadUrl = "https://docs.google.com/spreadsheets/d/" + res.id + "/export?format=csv";
+          if (format === 'xlsx') downloadUrl = "https://docs.google.com/spreadsheets/d/" + res.id + "/export?format=xlsx";
+          
+          var link = document.createElement('a');
+          link.href = downloadUrl;
+          link.target = '_blank';
+          link.textContent = 'Click here if ' + format.toUpperCase() + ' download does not start automatically';
+          link.className = "small"; link.style.color = "var(--accent)";
+          
+          repArea.innerHTML = '';
+          repArea.appendChild(link);
+          
+          if(format === 'csv' || format === 'xlsx') {
+              window.open(downloadUrl, '_blank');
+          }
+        } else {
+          alert('Export failed.'); repArea.innerHTML = '';
+        }
+      }).exportReportCSV(sy,sm);
+    }
+
+    document.getElementById('exportBtnSheet').addEventListener('click', function(){ triggerExport('sheet'); });
+    document.getElementById('exportBtnCSV').addEventListener('click', function(){ triggerExport('csv'); });
+    document.getElementById('exportBtnExcel').addEventListener('click', function(){ triggerExport('xlsx'); });
+  }
+
+  function td(tag, text){ var el = document.createElement(tag); el.textContent = text; return el; }
+  function formatDateISO(d){ var y = d.getFullYear(); var m = ('0'+(d.getMonth()+1)).slice(-2); var day = ('0'+d.getDate()).slice(-2); return y + '-' + m + '-' + day; }
+  function daysInMonth(y,m){ return new Date(y,m,0).getDate(); }
+
+  document.addEventListener('click', function(e){
+    if (!profileCard.contains(e.target) && !profileDropdown.contains(e.target)) profileDropdown.classList.remove('show');
+  });
+</script>
